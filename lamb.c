@@ -8,6 +8,8 @@
 #define NOB_STRIP_PREFIX
 #include "nob.h"
 
+// (\f.((\x.(f (x x))) (\x.(f (x x)))))
+
 typedef enum {
     EXPR_VAR,
     EXPR_FUN,
@@ -17,14 +19,33 @@ typedef enum {
 typedef struct Expr Expr;
 
 typedef struct {
-    const char *arg;
+    const char *name;
+    size_t id;
+} Var_Name;
+
+Var_Name var_name_bound(const char *name, size_t id)
+{
+    Var_Name var = {
+        .name = name,
+        .id = id,
+    };
+    return var;
+}
+
+Var_Name var_name_free(const char *name)
+{
+    return var_name_bound(name, 0);
+}
+
+typedef struct {
+    Var_Name arg;
     Expr *body;
 } Expr_Fun;
 
 struct Expr {
     Expr_Kind kind;
     union {
-        const char *var;
+        Var_Name var;
         Expr_Fun fun;
         struct {
             Expr *lhs;
@@ -38,7 +59,7 @@ Expr *var(const char *name)
     Expr *expr = malloc(sizeof(*expr));
     assert(expr != NULL);
     expr->kind = EXPR_VAR;
-    expr->as.var = strdup(name);
+    expr->as.var = var_name_free(name);
     return expr;
 }
 
@@ -47,7 +68,17 @@ Expr *fun(const char *arg, Expr *body)
     Expr *expr = malloc(sizeof(*expr));
     assert(expr != NULL);
     expr->kind = EXPR_FUN;
-    expr->as.fun.arg = strdup(arg);
+    expr->as.fun.arg = var_name_free(arg);
+    expr->as.fun.body = body;
+    return expr;
+}
+
+Expr *fun_bound(Var_Name arg, Expr *body)
+{
+    Expr *expr = malloc(sizeof(*expr));
+    assert(expr != NULL);
+    expr->kind = EXPR_FUN;
+    expr->as.fun.arg = arg;
     expr->as.fun.body = body;
     return expr;
 }
@@ -66,10 +97,10 @@ void expr_display(Expr *expr, String_Builder *sb)
 {
     switch (expr->kind) {
     case EXPR_VAR:
-        sb_appendf(sb, "%s", expr->as.var);
+        sb_appendf(sb, "%s", expr->as.var.name);
         break;
     case EXPR_FUN:
-        sb_appendf(sb, "(\\%s.", expr->as.fun.arg);
+        sb_appendf(sb, "(\\%s.", expr->as.fun.arg.name);
         expr_display(expr->as.fun.body, sb);
         sb_appendf(sb, ")");
         break;
@@ -84,17 +115,17 @@ void expr_display(Expr *expr, String_Builder *sb)
     }
 }
 
-Expr *replace(const char *arg, Expr *body, Expr *val)
+Expr *replace(Var_Name arg, Expr *body, Expr *val)
 {
     switch (body->kind) {
     case EXPR_VAR:
-        if (strcmp(body->as.var, arg) == 0) {
+        if (strcmp(body->as.var.name, arg.name) == 0 && body->as.var.id == arg.id) {
             return val;
         } else {
             return body;
         }
     case EXPR_FUN:
-        return fun(
+        return fun_bound(
             body->as.fun.arg,
             replace(arg, body->as.fun.body, val));
     case EXPR_APP:
@@ -114,7 +145,12 @@ Expr *eval1(Expr *expr)
 {
     switch (expr->kind) {
     case EXPR_VAR:
+        return expr;
     case EXPR_FUN:
+        Expr *body = eval1(expr->as.fun.body);
+        if (body != expr->as.fun.body) {
+            return fun_bound(expr->as.fun.arg, body);
+        }
         return expr;
     case EXPR_APP:
         Expr *lhs = eval1(expr->as.app.lhs);
@@ -144,35 +180,221 @@ void trace_expr(Expr *expr, String_Builder *sb)
     printf("%s\n", sb->items);
 }
 
+void bind_var(Expr *body, Var_Name var)
+{
+    switch (body->kind) {
+    case EXPR_VAR: {
+        if (strcmp(body->as.var.name, var.name) == 0) {
+            body->as.var.id = var.id;
+        }
+    } break;
+    case EXPR_FUN: {
+        bind_var(body->as.fun.body, var);
+    } break;
+    case EXPR_APP: {
+        bind_var(body->as.app.lhs, var);
+        bind_var(body->as.app.rhs, var);
+    } break;
+    default: UNREACHABLE("Expr_Kind");
+    }
+}
+
+Expr *bind_vars(Expr *expr)
+{
+    static size_t id_counter = 1;
+    switch (expr->kind) {
+    case EXPR_VAR: return expr;
+    case EXPR_FUN: {
+        assert(expr->as.fun.arg.id == 0);
+        expr->as.fun.arg.id = id_counter++;
+        bind_var(expr->as.fun.body, expr->as.fun.arg);
+        bind_vars(expr->as.fun.body);
+        return expr;
+    } break;
+    case EXPR_APP: {
+        bind_vars(expr->as.app.lhs);
+        bind_vars(expr->as.app.rhs);
+        return expr;
+    } break;
+    default: UNREACHABLE("Expr_Kind");
+    }
+}
+
+typedef enum {
+    TOKEN_INVALID,
+    TOKEN_END,
+    TOKEN_OPAREN,
+    TOKEN_CPAREN,
+    TOKEN_LAMBDA,
+    TOKEN_DOT,
+    TOKEN_NAME,
+} Token_Kind;
+
+const char *token_kind_display(Token_Kind kind)
+{
+    switch (kind) {
+    case TOKEN_INVALID: return "TOKEN_INVALID";
+    case TOKEN_END:     return "TOKEN_END";
+    case TOKEN_OPAREN:  return "TOKEN_OPAREN";
+    case TOKEN_CPAREN:  return "TOKEN_CPAREN";
+    case TOKEN_LAMBDA:  return "TOKEN_LAMBDA";
+    case TOKEN_DOT:     return "TOKEN_DOT";
+    case TOKEN_NAME:    return "TOKEN_NAME";
+    default: UNREACHABLE("Token_Kind");
+    }
+}
+
+typedef struct {
+    size_t pos, bol, row;
+} Cur;
+
+typedef struct {
+    const char *content;
+    size_t count;
+
+    Cur cur;
+
+    Token_Kind token;
+    String_Builder name;
+} Lexer;
+
+char lexer_curr_char(Lexer *l)
+{
+    if (l->cur.pos >= l->count) return 0;
+    return l->content[l->cur.pos];
+}
+
+char lexer_next_char(Lexer *l)
+{
+    if (l->cur.pos >= l->count) return 0;
+    char x = l->content[l->cur.pos++];
+    if (x == '\n') {
+        l->cur.row += 1;
+        l->cur.bol = l->cur.pos;
+    }
+    return x;
+}
+
+bool lexer_next(Lexer *l)
+{
+    while (isspace(lexer_curr_char(l))) {
+        lexer_next_char(l);
+    }
+
+    char x = lexer_next_char(l);
+    if (x == '\0') {
+        l->token = TOKEN_END;
+        return false;
+    }
+
+    switch (x) {
+    case '(':  l->token = TOKEN_OPAREN; return true;
+    case ')':  l->token = TOKEN_CPAREN; return true;
+    case '\\': l->token = TOKEN_LAMBDA; return true;
+    case '.':  l->token = TOKEN_DOT;    return true;
+    }
+
+    if (isalnum(x)) {
+        l->token = TOKEN_NAME;
+        l->name.count = 0;
+        da_append(&l->name, x);
+        while (isalnum(lexer_curr_char(l))) {
+            x = lexer_next_char(l);
+            da_append(&l->name, x);
+        }
+        sb_append_null(&l->name);
+        return true;
+    }
+
+    l->token = TOKEN_INVALID;
+    fprintf(stderr, "ERROR: Unknown token starts with `%c`\n", x);
+    return false;
+}
+
+bool lexer_expect(Lexer *l, Token_Kind expected)
+{
+    if (!lexer_next(l)) return false;
+    if (l->token != expected) {
+        fprintf(stderr, "ERROR: Unexpected token %s\n", token_kind_display(l->token));
+        return false;
+    }
+    return true;
+}
+
+Expr *parse_expr(Lexer *l);
+
+Expr *parse_app(Lexer *l)
+{
+    Expr *lhs = parse_expr(l);
+    Expr *rhs = parse_expr(l);
+    if (!lexer_expect(l, TOKEN_CPAREN)) return NULL;
+    return app(lhs, rhs);
+}
+
+Expr *parse_fun(Lexer *l)
+{
+    if (!lexer_expect(l, TOKEN_NAME)) return NULL;
+    const char *arg = strdup(l->name.items);
+    if (!lexer_expect(l, TOKEN_DOT)) return NULL;
+    Expr *body = parse_expr(l);
+    if (body == NULL) return NULL;
+    if (!lexer_expect(l, TOKEN_CPAREN)) return NULL;
+    return fun(arg, body);
+}
+
+Expr *parse_expr(Lexer *l)
+{
+    if (!lexer_next(l)) return NULL;
+    switch (l->token) {
+    case TOKEN_OPAREN: {
+        Cur saved = l->cur;
+        if (!lexer_next(l)) return NULL;
+        if (l->token == TOKEN_LAMBDA) {
+            return parse_fun(l);
+        } else {
+            l->cur = saved;
+            return parse_app(l);
+        }
+    } break;
+    case TOKEN_NAME: {
+        return var(strdup(l->name.items));
+    } break;
+    default:
+        fprintf(stderr, "ERROR: Unexpected token %s\n", token_kind_display(l->token));
+        return NULL;
+    }
+}
+
+char buffer[1024];
+
 int main()
 {
     String_Builder sb = {0};
 
-    // (\y.(\x.y)) x => (\x.x)
-    //
-    // > (\y.(\x.y)) then else
-    // > (\x.then) else
-    // > then
-    //
-    // > (\y.(\x.y)) x else
-    // > (\x.x) else
-    // > else
+    for (;;) {
+        printf("𝛌> ");
+        fflush(stdout);
+        if (!fgets(buffer, sizeof(buffer), stdin)) break;
+        const char *source = buffer;
+        Lexer l = {
+            .content = source,
+            .count = strlen(source),
+        };
+        Expr *expr = parse_expr(&l);
+        if (!expr) continue;
+        bind_vars(expr);
 
-    // Expr *expr = app(app(fun("y", fun("x", var("y"))), var("x")), var("else"));
-    Expr *expr = app(app(fun("y_420", fun("x_69", var("y_420"))), var("x")), var("else"));
-
-    // Expr *expr = app(
-    //     fun("x", app(var("x"), var("x"))),
-    //     fun("x", app(var("x"), var("x"))));
-
-    trace_expr(expr, &sb);
-    Expr *expr1 = eval1(expr);
-    while (expr1 != expr) {
-        expr = expr1;
         trace_expr(expr, &sb);
-        expr1 = eval1(expr);
+        Expr *expr1 = eval1(expr);
+        for (size_t i = 1; i < 10 && expr1 != expr; ++i) {
+            expr = expr1;
+            trace_expr(expr, &sb);
+            expr1 = eval1(expr);
+        }
+        if (expr1 != expr) {
+            printf("...\n");
+        }
     }
 
-    // asm("int3");
     return 0;
 }
