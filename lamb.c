@@ -153,13 +153,13 @@ Expr *eval1(Expr *expr)
         }
         return expr;
     case EXPR_APP:
+        if (expr->as.app.lhs->kind == EXPR_FUN) {
+            return apply(expr->as.app.lhs->as.fun, expr->as.app.rhs);
+        }
+
         Expr *lhs = eval1(expr->as.app.lhs);
         if (lhs != expr->as.app.lhs) {
             return app(lhs, expr->as.app.rhs);
-        }
-
-        if (lhs->kind == EXPR_FUN) {
-            return apply(lhs->as.fun, expr->as.app.rhs);
         }
 
         Expr *rhs = eval1(expr->as.app.rhs);
