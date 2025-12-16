@@ -8,7 +8,7 @@
 #define NOB_STRIP_PREFIX
 #include "nob.h"
 
-// (\f.((\x.(f (x x))) (\x.(f (x x)))))
+// Y = \f.(\x.(f (x x))) (\x.(f (x x)))
 
 typedef enum {
     EXPR_VAR,
@@ -100,16 +100,18 @@ void expr_display(Expr *expr, String_Builder *sb)
         sb_appendf(sb, "%s", expr->as.var.name);
         break;
     case EXPR_FUN:
-        sb_appendf(sb, "(\\%s.", expr->as.fun.arg.name);
+        sb_appendf(sb, "\\%s.", expr->as.fun.arg.name);
         expr_display(expr->as.fun.body, sb);
-        sb_appendf(sb, ")");
+        sb_appendf(sb, "");
         break;
     case EXPR_APP:
-        sb_appendf(sb, "(");
+        if (expr->as.app.lhs->kind != EXPR_VAR) sb_appendf(sb, "(");
         expr_display(expr->as.app.lhs, sb);
+        if (expr->as.app.lhs->kind != EXPR_VAR) sb_appendf(sb, ")");
         sb_appendf(sb, " ");
+        if (expr->as.app.rhs->kind != EXPR_VAR) sb_appendf(sb, "(");
         expr_display(expr->as.app.rhs, sb);
-        sb_appendf(sb, ")");
+        if (expr->as.app.rhs->kind != EXPR_VAR) sb_appendf(sb, ")");
         break;
     default: UNREACHABLE("Expr_Kind");
     }
@@ -146,12 +148,13 @@ Expr *eval1(Expr *expr)
     switch (expr->kind) {
     case EXPR_VAR:
         return expr;
-    case EXPR_FUN:
+    case EXPR_FUN: {
         Expr *body = eval1(expr->as.fun.body);
         if (body != expr->as.fun.body) {
             return fun_bound(expr->as.fun.arg, body);
         }
         return expr;
+    }
     case EXPR_APP:
         if (expr->as.app.lhs->kind == EXPR_FUN) {
             return apply(expr->as.app.lhs->as.fun, expr->as.app.rhs);
@@ -284,7 +287,7 @@ bool lexer_next(Lexer *l)
     char x = lexer_next_char(l);
     if (x == '\0') {
         l->token = TOKEN_END;
-        return false;
+        return true;
     }
 
     switch (x) {
@@ -311,6 +314,14 @@ bool lexer_next(Lexer *l)
     return false;
 }
 
+bool lexer_peek(Lexer *l)
+{
+    Cur saved = l->cur;
+    bool result = lexer_next(l);
+    l->cur = saved;
+    return result;
+}
+
 bool lexer_expect(Lexer *l, Token_Kind expected)
 {
     if (!lexer_next(l)) return false;
@@ -323,14 +334,6 @@ bool lexer_expect(Lexer *l, Token_Kind expected)
 
 Expr *parse_expr(Lexer *l);
 
-Expr *parse_app(Lexer *l)
-{
-    Expr *lhs = parse_expr(l);
-    Expr *rhs = parse_expr(l);
-    if (!lexer_expect(l, TOKEN_CPAREN)) return NULL;
-    return app(lhs, rhs);
-}
-
 Expr *parse_fun(Lexer *l)
 {
     if (!lexer_expect(l, TOKEN_NAME)) return NULL;
@@ -338,31 +341,39 @@ Expr *parse_fun(Lexer *l)
     if (!lexer_expect(l, TOKEN_DOT)) return NULL;
     Expr *body = parse_expr(l);
     if (body == NULL) return NULL;
-    if (!lexer_expect(l, TOKEN_CPAREN)) return NULL;
     return fun(arg, body);
 }
 
-Expr *parse_expr(Lexer *l)
+Expr *parse_primary(Lexer *l)
 {
     if (!lexer_next(l)) return NULL;
     switch (l->token) {
     case TOKEN_OPAREN: {
-        Cur saved = l->cur;
-        if (!lexer_next(l)) return NULL;
-        if (l->token == TOKEN_LAMBDA) {
-            return parse_fun(l);
-        } else {
-            l->cur = saved;
-            return parse_app(l);
-        }
-    } break;
-    case TOKEN_NAME: {
-        return var(strdup(l->name.items));
-    } break;
+        Expr *expr = parse_expr(l);
+        if (!expr) return NULL;
+        if (!lexer_expect(l, TOKEN_CPAREN)) return NULL;
+        return expr;
+    }
+    case TOKEN_LAMBDA: return parse_fun(l);
+    case TOKEN_NAME: return var(strdup(l->name.items));
     default:
         fprintf(stderr, "ERROR: Unexpected token %s\n", token_kind_display(l->token));
         return NULL;
     }
+}
+
+Expr *parse_expr(Lexer *l)
+{
+    Expr *lhs = parse_primary(l);
+    if (!lhs) return NULL;
+    if (!lexer_peek(l)) return NULL;
+    while (l->token != TOKEN_CPAREN && l->token != TOKEN_END) {
+        Expr *rhs = parse_primary(l);
+        if (!rhs) return NULL;
+        lhs = app(lhs, rhs);
+        if (!lexer_peek(l)) return NULL;
+    }
+    return lhs;
 }
 
 char buffer[1024];
