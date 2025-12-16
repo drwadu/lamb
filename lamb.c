@@ -8,8 +8,6 @@
 #define NOB_STRIP_PREFIX
 #include "nob.h"
 
-// Y = \f.(\x.(f (x x))) (\x.(f (x x)))
-
 typedef enum {
     EXPR_VAR,
     EXPR_FUN,
@@ -352,8 +350,22 @@ Expr *parse_fun(Lexer *l)
     if (!lexer_expect(l, TOKEN_NAME)) return NULL;
     const char *arg = strdup(l->name.items);
     if (!lexer_expect(l, TOKEN_DOT)) return NULL;
-    Expr *body = parse_expr(l);
-    if (body == NULL) return NULL;
+
+    Token_Kind a, b;
+    Cur saved = l->cur; {
+        if (!lexer_next(l)) return NULL;
+        a = l->token;
+        if (!lexer_next(l)) return NULL;
+        b = l->token;
+    } l->cur = saved;
+
+    Expr *body;
+    if (a == TOKEN_NAME && b == TOKEN_DOT) {
+        body = parse_fun(l);
+    } else {
+        body = parse_expr(l);
+    }
+    if (!body) return NULL;
     return fun(arg, body);
 }
 
