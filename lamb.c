@@ -292,6 +292,7 @@ typedef enum {
     TOKEN_CPAREN,
     TOKEN_LAMBDA,
     TOKEN_DOT,
+    TOKEN_COLON,
     TOKEN_NAME,
 } Token_Kind;
 
@@ -305,6 +306,7 @@ const char *token_kind_display(Token_Kind kind)
     case TOKEN_LAMBDA:  return "TOKEN_LAMBDA";
     case TOKEN_DOT:     return "TOKEN_DOT";
     case TOKEN_NAME:    return "TOKEN_NAME";
+    case TOKEN_COLON:   return "TOKEN_COLON";
     default: UNREACHABLE("Token_Kind");
     }
 }
@@ -368,6 +370,7 @@ bool lexer_next(Lexer *l)
     case ')':  l->token = TOKEN_CPAREN; return true;
     case '\\': l->token = TOKEN_LAMBDA; return true;
     case '.':  l->token = TOKEN_DOT;    return true;
+    case ':':  l->token = TOKEN_COLON;  return true;
     }
 
     if (isalnum(x)) {
@@ -468,10 +471,13 @@ Expr *parse_expr(Lexer *l)
 
 char buffer[1024];
 
-int main()
+int main(void)
 {
     String_Builder sb = {0};
 
+    size_t limit = 10;
+    printf("Lamb\n");
+    printf("Enter :help for more info\n");
     for (;;) {
         printf("𝛌> ");
         fflush(stdout);
@@ -481,13 +487,55 @@ int main()
             .content = source,
             .count = strlen(source),
         };
+
+        if (!lexer_peek(&l)) continue;
+        if (l.token == TOKEN_COLON) {
+            if (!lexer_next(&l)) continue;
+            if (!lexer_expect(&l, TOKEN_NAME)) continue;
+            if (strcmp(l.name.items, "limit") == 0) {
+                if (!lexer_peek(&l)) continue;
+                switch (l.token) {
+                case TOKEN_NAME:
+                    if (!lexer_expect(&l, TOKEN_NAME)) continue;
+                    limit = strtoul(l.name.items, NULL, 10);
+                    if (limit) {
+                        printf("Setting evaluation limit to %zu\n", limit);
+                    } else {
+                        printf("Evaluation limit is disabled\n");
+                    }
+                    continue;
+                case TOKEN_END:
+                    if (limit) {
+                        printf("Evaluation limit is %zu\n", limit);
+                    } else {
+                        printf("Evaluation limit is disabled\n");
+                    }
+                    continue;
+                default:
+                    lexer_print_loc(&l, stderr);
+                    fprintf(stderr, "ERROR: Unexpected token %s\n", token_kind_display(l.token));
+                    continue;
+                }
+            }
+            if (strcmp(l.name.items, "quit") == 0) break;
+            if (strcmp(l.name.items, "help") == 0) {
+                printf("Availabel commands:\n");
+                printf("  :limit [number] - change evaluation limit (0 for no limit)\n");
+                printf("  :quit           - quit the REPL\n");
+                printf("  :help           - print this help message\n");
+                continue;
+            }
+            printf("ERROR: unknown command `%s`\n", l.name.items);
+            continue;
+        }
+
         Expr *expr = parse_expr(&l);
         if (!expr) continue;
         bind_vars(expr);
 
         trace_expr(expr, &sb);
         Expr *expr1 = eval1(expr);
-        for (size_t i = 1; i < 10 && expr1 != expr; ++i) {
+        for (size_t i = 1; (limit == 0 || i < limit) && expr1 != expr; ++i) {
             expr = expr1;
             trace_expr(expr, &sb);
             expr1 = eval1(expr);
