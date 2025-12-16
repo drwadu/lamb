@@ -521,7 +521,7 @@ int main(void)
             }
             if (strcmp(l.name.items, "quit") == 0) break;
             if (strcmp(l.name.items, "help") == 0) {
-                printf("Availabel commands:\n");
+                printf("Available commands:\n");
                 printf("  :limit [number] - change evaluation limit (0 for no limit)\n");
                 printf("  :quit           - quit the REPL\n");
                 printf("  :help           - print this help message\n");
