@@ -14,6 +14,16 @@ $ ./lamb
  W-W'
 Enter :help for more info
 λ> (\f.(\x.f (x x)) (\x.f (x x))) g
+(\f.(\x.f (x x)) (\x.f (x x))) g
+(\x.g (x x)) (\x.g (x x))
+g ((\x.g (x x)) (\x.g (x x)))
+g (g ((\x.g (x x)) (\x.g (x x))))
+g (g (g ((\x.g (x x)) (\x.g (x x)))))
+g (g (g (g ((\x.g (x x)) (\x.g (x x))))))
+g (g (g (g (g ((\x.g (x x)) (\x.g (x x)))))))
+g (g (g (g (g (g ((\x.g (x x)) (\x.g (x x))))))))
+g (g (g (g (g (g (g ((\x.g (x x)) (\x.g (x x)))))))))
+g (g (g (g (g (g (g (g ((\x.g (x x)) (\x.g (x x))))))))))
 ...
 ```
 
