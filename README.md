@@ -13,7 +13,7 @@ $ ./lamb
 ,---@.
  W-W'
 Enter :help for more info
-λ> (\f.(\x.f (x x)) (\x.f (x x))) g
+𝛌> (\f.(\x.f (x x)) (\x.f (x x))) g
 (\f.(\x.f (x x)) (\x.f (x x))) g
 (\x.g (x x)) (\x.g (x x))
 g ((\x.g (x x)) (\x.g (x x)))
@@ -44,27 +44,27 @@ The syntax is based on the [Notation of Untype Lambda Calculus](https://en.wikip
 Variables are any alphanumeric names:
 
 ```
-λ> x
+𝛌> x
 x
-λ> hello69
+𝛌> hello69
 hello69
-λ> 69420
+𝛌> 69420
 69420
-λ>
+𝛌>
 ```
 
 Yes, fully numeric sequences of characters are also considered names, because they are alphanumeric. This may change in the future.
 
 ### Functions
 
-To denote functions instead of small greek almbda `λ` we use backslash `\` (this may change in the future, we are considering allowing `λ` as an alternative):
+To denote functions instead of small greek almbda `𝛌` we use backslash `\` (this may change in the future, we are considering allowing `𝛌` as an alternative):
 
 ```
-λ> \x.x
+𝛌> \x.x
 \x.x
-λ> \x.\y.x
+𝛌> \x.\y.x
 \x.\y.x
-λ>
+𝛌>
 ```
 
 The body of the function extends as far right as possible. Use parenthesis to denote the boundaries of the function:
@@ -81,12 +81,12 @@ x
 Since the variable names can be longer than 1 character we can't use that silly mathematician trick of stitching their names together by saying that `\xy.x` means `\x.\y.x`, because in Lamb it just means it's a single function with a parameter `xy`:
 
 ```
-λ> \xy.x
+𝛌> \xy.x
 \xy.x
 𝛌> (\xy.x) z
 (\xy.x) z
 x
-λ>
+𝛌>
 ```
 
 Instead we allow you to drop consequent backslashes turning the dot `.` into a parameter separator:
