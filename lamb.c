@@ -49,10 +49,6 @@
 
 #define sb_append_null(sb) da_append(sb, 0)
 
-typedef struct {
-    size_t unwrap;
-} Expr_Index;
-
 char *copy_string(const char *s)
 {
     int n = strlen(s);
@@ -92,59 +88,114 @@ int sb_appendf(String_Builder *sb, const char *fmt, ...)
     return n;
 }
 
+bool read_entire_file(const char *path, String_Builder *sb)
+{
+    FILE *f = fopen(path, "rb");
+    size_t new_count = 0;
+    long long m = 0;
+    if (f == NULL)                 goto fail;
+    if (fseek(f, 0, SEEK_END) < 0) goto fail;
+#ifndef _WIN32
+    m = ftell(f);
+#else
+    m = _ftelli64(f);
+#endif
+    if (m < 0)                     goto fail;
+    if (fseek(f, 0, SEEK_SET) < 0) goto fail;
+
+    new_count = sb->count + m;
+    if (new_count > sb->capacity) {
+        sb->items = realloc(sb->items, new_count);
+        assert(sb->items != NULL && "Buy more RAM lool!!");
+        sb->capacity = new_count;
+    }
+
+    fread(sb->items + sb->count, m, 1, f);
+    if (ferror(f)) {
+        // TODO: Afaik, ferror does not set errno. So the error reporting in fail is not correct in this case.
+        goto fail;
+    }
+    sb->count = new_count;
+
+    fclose(f);
+    return true;
+fail:
+    fprintf(stderr, "ERROR: Could not read file %s: %s\n", path, strerror(errno));
+    if (f) fclose(f);
+    return false;
+}
+
+struct {
+    const char **items;
+    size_t count;
+    size_t capacity;
+} labels = {0};
+
+const char *intern_label(const char *label)
+{
+    for (size_t i = 0; i < labels.count; ++i) {
+        if (strcmp(labels.items[i], label) == 0) {
+            return labels.items[i];
+        }
+    }
+    char *result = copy_string(label);
+    da_append(&labels, result);
+    return result;
+}
+
+typedef struct {
+    // Displayed name of the symbol.
+    const char *label;
+    // Internal tag that makes two symbols with the same label different if needed.
+    // Usually used to obtain a fresh symbol for capture avoiding substitution.
+    size_t tag;
+} Symbol;
+
+bool symbol_eq(Symbol a, Symbol b)
+{
+    // NOTE: We compare addresses of the labels because they are expected to be interned with intern_label()
+    return a.label == b.label && a.tag == b.tag;
+}
+
+Symbol symbol(const char *label)
+{
+    Symbol s = { .label = intern_label(label) };
+    return s;
+}
+
+Symbol symbol_fresh(Symbol s)
+{
+    static size_t global_counter = 0;
+    s.tag = ++global_counter;
+    return s;
+}
+
 typedef enum {
     EXPR_VAR,
     EXPR_FUN,
     EXPR_APP,
 } Expr_Kind;
 
-typedef struct Expr Expr;
+typedef struct {
+    size_t unwrap;
+} Expr_Index;
 
 typedef struct {
-    const char *name; // TODO: I don't like how easy it is to forget to intern a name. Let's do a similar trick to Expr_Index
-    size_t id;
-} Var_Name;
-
-bool var_name_eq(Var_Name a, Var_Name b)
-{
-    return a.name == b.name && a.id == b.id;
-}
-
-Var_Name var_name(const char *name)
-{
-    Var_Name var = { .name = name };
-    return var;
-}
-
-typedef struct {
-    Var_Name arg;
-    Expr_Index body;
-} Expr_Fun;
-
-struct Expr {
     Expr_Kind kind;
     bool visited;
     bool live;
     union {
-        Var_Name var;
-        Expr_Fun fun;
+        Symbol var;
+        struct {
+            Symbol param;
+            Expr_Index body;
+        } fun;
         struct {
             Expr_Index lhs;
             Expr_Index rhs;
         } app;
     } as;
-};
-
-typedef struct {
-    const char *name;
-    Expr_Index body;
-} Binding;
-
-typedef struct {
-    Binding *items;
-    size_t count;
-    size_t capacity;
-} Bindings;
+} Expr;
 
 struct {
     Expr *items;
@@ -152,13 +203,13 @@ struct {
     size_t capacity;
 } expr_pool = {0};
 
-#define expr_slot(index) (                           \
-    expr_pool.items[                                 \
-        (assert(index.unwrap < expr_pool.count),     \
-         assert(expr_pool.items[index.unwrap].live), \
-         index.unwrap)])
+#define expr_slot(index) (                             \
+    expr_pool.items[                                   \
+        (assert((index).unwrap < expr_pool.count),     \
+         assert(expr_pool.items[(index).unwrap].live), \
+         (index).unwrap)])
 
-#define expr_slot_unsafe(index) (expr_pool.items[index.unwrap])
+#define expr_slot_unsafe(index) expr_pool.items[(index).unwrap]
 
 struct {
     Expr_Index *items;
@@ -166,25 +217,7 @@ struct {
     size_t capacity;
 } expr_dead_pool = {0};
 
-struct {
-    const char **items;
-    size_t count;
-    size_t capacity;
-} strings = {0};
-
-const char *intern(const char *s)
-{
-    for (size_t i = 0; i < strings.count; ++i) {
-        if (strcmp(strings.items[i], s) == 0) {
-            return strings.items[i];
-        }
-    }
-    char *result = copy_string(s);
-    da_append(&strings, result);
-    return result;
-}
-
-Expr_Index make_expr(void)
+Expr_Index alloc_expr(void)
 {
     Expr_Index result;
     if (expr_dead_pool.count > 0) {
@@ -199,49 +232,32 @@ Expr_Index make_expr(void)
     return result;
 }
 
-void kill_expr(Expr_Index expr)
+void free_expr(Expr_Index expr)
 {
     expr_slot(expr).live = false;
     da_append(&expr_dead_pool, expr);
 }
 
-Expr_Index var(const char *name)
+Expr_Index var(Symbol name)
 {
-    Expr_Index expr = make_expr();
-    expr_slot(expr).kind = EXPR_VAR;
-    expr_slot(expr).as.var = var_name(intern(name));
-    return expr;
-}
-
-Expr_Index var_var_name(Var_Name name)
-{
-    Expr_Index expr = make_expr();
+    Expr_Index expr = alloc_expr();
     expr_slot(expr).kind = EXPR_VAR;
     expr_slot(expr).as.var = name;
     return expr;
 }
 
-Expr_Index fun(const char *arg, Expr_Index body)
+Expr_Index fun(Symbol param, Expr_Index body)
 {
-    Expr_Index expr = make_expr();
+    Expr_Index expr = alloc_expr();
     expr_slot(expr).kind = EXPR_FUN;
-    expr_slot(expr).as.fun.arg = var_name(intern(arg));
-    expr_slot(expr).as.fun.body = body;
-    return expr;
-}
-
-Expr_Index fun_var_name(Var_Name arg, Expr_Index body)
-{
-    Expr_Index expr = make_expr();
-    expr_slot(expr).kind = EXPR_FUN;
-    expr_slot(expr).as.fun.arg = arg;
+    expr_slot(expr).as.fun.param = param;
     expr_slot(expr).as.fun.body = body;
     return expr;
 }
 
 Expr_Index app(Expr_Index lhs, Expr_Index rhs)
 {
-    Expr_Index expr = make_expr();
+    Expr_Index expr = alloc_expr();
     expr_slot(expr).kind = EXPR_APP;
     expr_slot(expr).as.app.lhs = lhs;
     expr_slot(expr).as.app.rhs = rhs;
@@ -252,16 +268,16 @@ void expr_display(Expr_Index expr, String_Builder *sb)
 {
     switch (expr_slot(expr).kind) {
     case EXPR_VAR:
-        sb_appendf(sb, "%s", expr_slot(expr).as.var.name);
-        if (expr_slot(expr).as.var.id) {
-            sb_appendf(sb, "@%zu", expr_slot(expr).as.var.id);
+        sb_appendf(sb, "%s", expr_slot(expr).as.var.label);
+        if (expr_slot(expr).as.var.tag) {
+            sb_appendf(sb, "@%zu", expr_slot(expr).as.var.tag);
         }
         break;
     case EXPR_FUN:
-        if (expr_slot(expr).as.fun.arg.id) {
-            sb_appendf(sb, "\\%s@%zu.", expr_slot(expr).as.fun.arg.name, expr_slot(expr).as.fun.arg.id);
+        if (expr_slot(expr).as.fun.param.tag) {
+            sb_appendf(sb, "\\%s@%zu.", expr_slot(expr).as.fun.param.label, expr_slot(expr).as.fun.param.tag);
         } else {
-            sb_appendf(sb, "\\%s.", expr_slot(expr).as.fun.arg.name);
+            sb_appendf(sb, "\\%s.", expr_slot(expr).as.fun.param.label);
         }
         expr_display(expr_slot(expr).as.fun.body, sb);
         break;
@@ -282,13 +298,13 @@ void expr_display(Expr_Index expr, String_Builder *sb)
     }
 }
 
-bool is_var_free_there(Var_Name name, Expr_Index there)
+bool is_var_free_there(Symbol name, Expr_Index there)
 {
     switch (expr_slot(there).kind) {
     case EXPR_VAR:
-        return var_name_eq(expr_slot(there).as.var, name);
+        return symbol_eq(expr_slot(there).as.var, name);
     case EXPR_FUN:
-        if (var_name_eq(expr_slot(there).as.fun.arg, name)) return false;
+        if (symbol_eq(expr_slot(there).as.fun.param, name)) return false;
         return is_var_free_there(name, expr_slot(there).as.fun.body);
     case EXPR_APP:
         if (is_var_free_there(name, expr_slot(there).as.app.lhs)) return true;
@@ -298,43 +314,36 @@ bool is_var_free_there(Var_Name name, Expr_Index there)
     }
 }
 
-Expr_Index replace(Var_Name arg, Expr_Index body, Expr_Index val)
+Expr_Index replace(Symbol param, Expr_Index body, Expr_Index arg)
 {
     switch (expr_slot(body).kind) {
     case EXPR_VAR:
-        if (var_name_eq(expr_slot(body).as.var, arg)) {
-            return val;
+        if (symbol_eq(expr_slot(body).as.var, param)) {
+            return arg;
         } else {
             return body;
         }
     case EXPR_FUN:
-        if (var_name_eq(expr_slot(body).as.fun.arg, arg)) return body;
-        if (!is_var_free_there(expr_slot(body).as.fun.arg, val)) {
-            return fun_var_name(expr_slot(body).as.fun.arg, replace(arg, expr_slot(body).as.fun.body, val));
+        if (symbol_eq(expr_slot(body).as.fun.param, param)) return body;
+        if (!is_var_free_there(expr_slot(body).as.fun.param, arg)) {
+            return fun(expr_slot(body).as.fun.param, replace(param, expr_slot(body).as.fun.body, arg));
         }
-        Var_Name fresh_name = expr_slot(body).as.fun.arg;
-        static size_t id_counter = 0;
-        fresh_name.id = ++id_counter;
-        Expr_Index fresh_arg = var_var_name(fresh_name);
-        return fun_var_name(
-            fresh_name,
-            replace(arg,
+        Symbol fresh_param_name = symbol_fresh(expr_slot(body).as.fun.param);
+        Expr_Index fresh_param = var(fresh_param_name);
+        return fun(
+            fresh_param_name,
+            replace(param,
                 replace(
-                    expr_slot(body).as.fun.arg,
+                    expr_slot(body).as.fun.param,
                     expr_slot(body).as.fun.body,
-                    fresh_arg),
-                val));
+                    fresh_param),
+                arg));
     case EXPR_APP:
         return app(
-            replace(arg, expr_slot(body).as.app.lhs, val),
-            replace(arg, expr_slot(body).as.app.rhs, val));
+            replace(param, expr_slot(body).as.app.lhs, arg),
+            replace(param, expr_slot(body).as.app.rhs, arg));
     default: UNREACHABLE("Expr_Kind");
     }
-}
-
-Expr_Index apply(Expr_Fun fun, Expr_Index val)
-{
-    return replace(fun.arg, fun.body, val);
 }
 
 Expr_Index eval1(Expr_Index expr)
@@ -345,7 +354,7 @@ Expr_Index eval1(Expr_Index expr)
     case EXPR_FUN: {
         Expr_Index body = eval1(expr_slot(expr).as.fun.body);
         if (body.unwrap != expr_slot(expr).as.fun.body.unwrap) {
-            return fun_var_name(expr_slot(expr).as.fun.arg, body);
+            return fun(expr_slot(expr).as.fun.param, body);
         }
         return expr;
     }
@@ -354,7 +363,10 @@ Expr_Index eval1(Expr_Index expr)
         Expr_Index rhs = expr_slot(expr).as.app.rhs;
 
         if (expr_slot(lhs).kind == EXPR_FUN) {
-            return apply(expr_slot(lhs).as.fun, rhs);
+            return replace(
+                expr_slot(lhs).as.fun.param,
+                expr_slot(lhs).as.fun.body,
+                rhs);
         }
 
         Expr_Index new_lhs = eval1(lhs);
@@ -495,9 +507,9 @@ bool lexer_next(Lexer *l)
 
 bool lexer_peek(Lexer *l)
 {
-    Cur saved = l->cur;
+    Cur cur = l->cur;
     bool result = lexer_next(l);
-    l->cur = saved;
+    l->cur = cur;
     return result;
 }
 
@@ -517,16 +529,16 @@ bool parse_expr(Lexer *l, Expr_Index *expr);
 bool parse_fun(Lexer *l, Expr_Index *expr)
 {
     if (!lexer_expect(l, TOKEN_NAME)) return false;
-    const char *arg = intern(l->name.items);
+    Symbol arg = symbol(l->name.items);
     if (!lexer_expect(l, TOKEN_DOT)) return false;
 
     Token_Kind a, b;
-    Cur saved = l->cur; {
+    Cur cur = l->cur; {
         if (!lexer_next(l)) return false;
         a = l->token;
         if (!lexer_next(l)) return false;
         b = l->token;
-    } l->cur = saved;
+    } l->cur = cur;
 
     Expr_Index body;
     if (a == TOKEN_NAME && b == TOKEN_DOT) {
@@ -549,7 +561,7 @@ bool parse_primary(Lexer *l, Expr_Index *expr)
     }
     case TOKEN_LAMBDA: return parse_fun(l, expr);
     case TOKEN_NAME:
-        *expr = var(l->name.items);
+        *expr = var(symbol(l->name.items));
         return true;
     default:
         lexer_print_loc(l, stderr);
@@ -575,7 +587,6 @@ bool parse_expr(Lexer *l, Expr_Index *expr)
     }
     return true;
 }
-
 
 typedef struct {
     const char *name;
@@ -641,6 +652,65 @@ void gc_mark(Expr_Index root)
     }
 }
 
+typedef struct {
+    Symbol name;
+    Expr_Index body;
+} Binding;
+
+typedef struct {
+    Binding *items;
+    size_t count;
+    size_t capacity;
+} Bindings;
+
+void create_binding(Bindings *bindings, Symbol name, Expr_Index body)
+{
+    for (size_t i = 0; i < bindings->count; ++i) {
+        if (symbol_eq(bindings->items[i].name, name)) {
+            bindings->items[i].body = body;
+            if (name.tag == 0) {
+                printf("Updated binding %s\n", name.label);
+            } else {
+                printf("Updated binding %s@%zu\n", name.label, name.tag);
+            }
+            return;
+        }
+    }
+    Binding binding = {
+        .name = name,
+        .body = body,
+    };
+    da_append(bindings, binding);
+    if (name.tag == 0) {
+        printf("Created binding %s\n", name.label);
+    } else {
+        printf("Created binding %s@%zu\n", name.label, name.tag);
+    }
+}
+
+bool create_bindings_from_file(const char *file_path, String_Builder *sb, Bindings *bindings)
+{
+    sb->count = 0;
+    if (!read_entire_file(file_path, sb)) return false;
+    Lexer l = {
+        .content = sb->items,
+        .count = sb->count,
+        .file_path = file_path,
+    };
+    if (!lexer_peek(&l)) return false;
+    while (l.token != TOKEN_END) {
+        if (!lexer_expect(&l, TOKEN_NAME)) return false;
+        Symbol name = symbol(l.name.items);
+        if (!lexer_expect(&l, TOKEN_EQUALS)) return false;
+        Expr_Index body;
+        if (!parse_expr(&l, &body)) return false;
+        if (!lexer_expect(&l, TOKEN_SEMICOLON)) return false;
+        create_binding(bindings, name, body);
+        if (!lexer_peek(&l)) return false;
+    }
+    return true;
+}
+
 void gc(Expr_Index root, Bindings bindings)
 {
     for (size_t i = 0; i < expr_pool.count; ++i) {
@@ -656,92 +726,15 @@ void gc(Expr_Index root, Bindings bindings)
 
     for (size_t i = 0; i < expr_pool.count; ++i) {
         if (expr_pool.items[i].live && !expr_pool.items[i].visited) {
-            kill_expr((Expr_Index){i});
+            free_expr((Expr_Index){i});
         }
     }
-}
-
-bool read_entire_file(const char *path, String_Builder *sb)
-{
-    FILE *f = fopen(path, "rb");
-    size_t new_count = 0;
-    long long m = 0;
-    if (f == NULL)                 goto fail;
-    if (fseek(f, 0, SEEK_END) < 0) goto fail;
-#ifndef _WIN32
-    m = ftell(f);
-#else
-    m = _ftelli64(f);
-#endif
-    if (m < 0)                     goto fail;
-    if (fseek(f, 0, SEEK_SET) < 0) goto fail;
-
-    new_count = sb->count + m;
-    if (new_count > sb->capacity) {
-        sb->items = realloc(sb->items, new_count);
-        assert(sb->items != NULL && "Buy more RAM lool!!");
-        sb->capacity = new_count;
-    }
-
-    fread(sb->items + sb->count, m, 1, f);
-    if (ferror(f)) {
-        // TODO: Afaik, ferror does not set errno. So the error reporting in fail is not correct in this case.
-        goto fail;
-    }
-    sb->count = new_count;
-
-    fclose(f);
-    return true;
-fail:
-    fprintf(stderr, "ERROR: Could not read file %s: %s\n", path, strerror(errno));
-    if (f) fclose(f);
-    return false;
-}
-
-void create_binding(Bindings *bindings, const char *name, Expr_Index body)
-{
-    for (size_t i = 0; i < bindings->count; ++i) {
-        if (bindings->items[i].name == name) {
-            bindings->items[i].body = body;
-            printf("Updated binding %s\n", name);
-            return;
-        }
-    }
-    Binding binding = {
-        .name = name,
-        .body = body,
-    };
-    da_append(bindings, binding);
-    printf("Created binding %s\n", name);
-}
-
-bool create_bindings_from_file(const char *file_path, String_Builder *sb, Bindings *bindings)
-{
-    sb->count = 0;
-    if (!read_entire_file(file_path, sb)) return false;
-    Lexer l = {
-        .content = sb->items,
-        .count = sb->count,
-        .file_path = file_path,
-    };
-    if (!lexer_peek(&l)) return false;
-    while (l.token != TOKEN_END) {
-        if (!lexer_expect(&l, TOKEN_NAME)) return false;
-        const char *name = intern(l.name.items);
-        if (!lexer_expect(&l, TOKEN_EQUALS)) return false;
-        Expr_Index body;
-        if (!parse_expr(&l, &body)) return false;
-        if (!lexer_expect(&l, TOKEN_SEMICOLON)) return false;
-        create_binding(bindings, name, body);
-        if (!lexer_peek(&l)) return false;
-    }
-    return true;
 }
 
 int main(int argc, char **argv)
 {
     static char buffer[1024];
-    static String_Builder sb = {0};
+    static String_Builder sb = {0}; // TODO: This single sb is used for both loading files and tracing exprs.
     static Commands commands = {0};
     static Bindings bindings = {0};
 
@@ -789,7 +782,7 @@ again:
                 goto again;
             }
             if (command(&commands, l.name.items, "mem", "", "print memory related stats")) {
-                printf("Interned strings: %zu\n", strings.count);
+                printf("Interned labels:  %zu\n", labels.count);
                 printf("Allocated exprs:  %zu\n", expr_pool.count);
                 printf("Dead exprs:       %zu\n", expr_dead_pool.count);
                 goto again;
@@ -839,7 +832,7 @@ again:
 
         if (a == TOKEN_NAME && b == TOKEN_EQUALS) {
             if (!lexer_expect(&l, TOKEN_NAME)) goto again;
-            const char *name = intern(l.name.items);
+            Symbol name = symbol(l.name.items);
             if (!lexer_expect(&l, TOKEN_EQUALS)) goto again;
             Expr_Index body;
             if (!parse_expr(&l, &body)) goto again;
@@ -867,7 +860,7 @@ again:
             trace_expr(expr, &sb);
         }
     }
-    quit:
+quit:
 
     return 0;
 }
