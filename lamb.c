@@ -298,6 +298,15 @@ void expr_display(Expr_Index expr, String_Builder *sb)
     }
 }
 
+void trace_expr(Expr_Index expr)
+{
+    static String_Builder sb = {0};
+    sb.count = 0;
+    expr_display(expr, &sb);
+    sb_append_null(&sb);
+    printf("%s\n", sb.items);
+}
+
 bool is_var_free_there(Symbol name, Expr_Index there)
 {
     switch (expr_slot(there).kind) {
@@ -368,6 +377,7 @@ Expr_Index eval1(Expr_Index expr)
                 expr_slot(lhs).as.fun.body,
                 rhs);
         }
+        // TODO: Introduce a #trace magic function
 
         Expr_Index new_lhs = eval1(lhs);
         if (lhs.unwrap != new_lhs.unwrap) {
@@ -383,14 +393,6 @@ Expr_Index eval1(Expr_Index expr)
     }
     default: UNREACHABLE("Expr_Kind");
     }
-}
-
-void trace_expr(Expr_Index expr, String_Builder *sb)
-{
-    sb->count = 0;
-    expr_display(expr, sb);
-    sb_append_null(sb);
-    printf("%s\n", sb->items);
 }
 
 typedef enum {
@@ -735,7 +737,7 @@ void gc(Expr_Index root, Bindings bindings)
 int main(int argc, char **argv)
 {
     static char buffer[1024];
-    static String_Builder sb = {0}; // TODO: This single sb is used for both loading files and tracing exprs.
+    static String_Builder sb = {0};
     static Commands commands = {0};
     static Bindings bindings = {0};
 
@@ -847,18 +849,18 @@ again:
             expr = replace(bindings.items[i-1].name, expr, bindings.items[i-1].body);
         }
 
-        if (trace) trace_expr(expr, &sb);
+        if (trace) trace_expr(expr);
         Expr_Index expr1 = eval1(expr);
         for (size_t i = 1; (limit == 0 || i < limit) && expr1.unwrap != expr.unwrap; ++i) {
             expr = expr1;
             gc(expr, bindings);
-            if (trace) trace_expr(expr, &sb);
+            if (trace) trace_expr(expr);
             expr1 = eval1(expr);
         }
         if (expr1.unwrap != expr.unwrap) {
             printf("Evaluation limit exceeded.\n");
         } else {
-            if (!trace) trace_expr(expr, &sb);
+            if (!trace) trace_expr(expr);
         }
     }
 quit:
