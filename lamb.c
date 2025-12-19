@@ -9,6 +9,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <signal.h>
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -986,11 +987,11 @@ void gc(Expr_Index root, Bindings bindings)
     }
 }
 
-static volatile bool ctrl_c = false;
+static volatile sig_atomic_t ctrl_c = 0;
 void ctrl_c_handler(int signum)
 {
     UNUSED(signum);
-    ctrl_c = true;
+    ctrl_c = 1;
 }
 
 // TODO: step debug mode instead of the tracing mode
@@ -1203,7 +1204,7 @@ again:
         if (trace) trace_expr(expr);
         Expr_Index expr1;
         if (!eval1(expr, &expr1)) goto again;
-        ctrl_c = false;
+        ctrl_c = 0;
         for (size_t i = 1; !ctrl_c && expr1.unwrap != expr.unwrap; ++i) {
             expr = expr1;
             gc(expr, bindings);
