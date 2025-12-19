@@ -882,19 +882,6 @@ again:
                 printf("Dead exprs:       %zu\n", expr_dead_pool.count);
                 goto again;
             }
-            if (command(&commands, l.name.items, "delete", "[binding]", "delete a binding by name")) {
-                if (!lexer_expect(&l, TOKEN_NAME)) goto again;
-                Symbol name = symbol(l.name.items);
-                for (size_t i = 0; i < bindings.count; ++i) {
-                    if (symbol_eq(bindings.items[i].name, name)) {
-                        da_delete_at(&bindings, i);
-                        printf("Deleted binding %s\n", name.label);
-                        goto again;
-                    }
-                }
-                printf("ERROR: binding %s was not found\n", name.label);
-                goto again;
-            }
             if (command(&commands, l.name.items, "limit", "[number]", "change evaluation limit (0 for no limit)")) {
                 if (!lexer_peek(&l)) goto again;
                 switch (l.token) {
