@@ -101,22 +101,19 @@ typedef enum {
 typedef struct Expr Expr;
 
 typedef struct {
-    const char *name;
+    const char *name; // TODO: I don't like how easy it is to forget to intern a name. Let's do a similar trick to Expr_Index
     size_t id;
 } Var_Name;
 
-Var_Name var_name_bound(const char *name, size_t id)
+bool var_name_eq(Var_Name a, Var_Name b)
 {
-    Var_Name var = {
-        .name = name,
-        .id = id,
-    };
-    return var;
+    return a.name == b.name && a.id == b.id;
 }
 
 Var_Name var_name_free(const char *name)
 {
-    return var_name_bound(name, 0);
+    Var_Name var = { .name = name };
+    return var;
 }
 
 typedef struct {
@@ -225,7 +222,7 @@ Expr_Index fun(const char *arg, Expr_Index body)
     return expr;
 }
 
-Expr_Index fun_bound(Var_Name arg, Expr_Index body)
+Expr_Index fun_var_name(Var_Name arg, Expr_Index body)
 {
     Expr_Index expr = make_expr();
     expr_slot(expr).kind = EXPR_FUN;
@@ -274,13 +271,13 @@ Expr_Index replace(Var_Name arg, Expr_Index body, Expr_Index val)
 {
     switch (expr_slot(body).kind) {
     case EXPR_VAR:
-        if (expr_slot(body).as.var.name == arg.name && expr_slot(body).as.var.id == arg.id) {
+        if (var_name_eq(expr_slot(body).as.var, arg)) {
             return val;
         } else {
             return body;
         }
     case EXPR_FUN:
-        return fun_bound(
+        return fun_var_name(
             expr_slot(body).as.fun.arg,
             replace(arg, expr_slot(body).as.fun.body, val));
     case EXPR_APP:
@@ -304,7 +301,7 @@ Expr_Index eval1(Expr_Index expr)
     case EXPR_FUN: {
         Expr_Index body = eval1(expr_slot(expr).as.fun.body);
         if (body.unwrap != expr_slot(expr).as.fun.body.unwrap) {
-            return fun_bound(expr_slot(expr).as.fun.arg, body);
+            return fun_var_name(expr_slot(expr).as.fun.arg, body);
         }
         return expr;
     }
@@ -536,7 +533,7 @@ bool parse_expr(Lexer *l, Expr_Index *expr);
 bool parse_fun(Lexer *l, Expr_Index *expr)
 {
     if (!lexer_expect(l, TOKEN_NAME)) return false;
-    const char *arg = copy_string(l->name.items);
+    const char *arg = intern(l->name.items);
     if (!lexer_expect(l, TOKEN_DOT)) return false;
 
     Token_Kind a, b;
@@ -568,7 +565,7 @@ bool parse_primary(Lexer *l, Expr_Index *expr)
     }
     case TOKEN_LAMBDA: return parse_fun(l, expr);
     case TOKEN_NAME:
-        *expr = var(copy_string(l->name.items));
+        *expr = var(l->name.items);
         return true;
     default:
         lexer_print_loc(l, stderr);
@@ -699,7 +696,7 @@ bool read_entire_file(const char *path, String_Builder *sb)
 
     fread(sb->items + sb->count, m, 1, f);
     if (ferror(f)) {
-        // TODO: Afaik, ferror does not set errno. So the error reporting in defer is not correct in this case.
+        // TODO: Afaik, ferror does not set errno. So the error reporting in fail is not correct in this case.
         goto fail;
     }
     sb->count = new_count;

@@ -5,11 +5,11 @@ one  = \f.x.f x;
 two  = \f.x.f (f x);
 inc  = \n.f.x.f (n f x);
 
+true = \x.y.x;
+false = \x.y.y;
+
 pair = \x.y.f.f x y;
 first = \p.p true;
 second = \p.p false;
-
-true = \x.y.x;
-false = \x.y.y;
 
 Y    = \f.(\x.f (x x)) (\x.f (x x));
