@@ -1,6 +1,6 @@
 // ,---@>
 //  W-W'
-// cc -pedantic -std=c99 -o lamb lamb.c
+// cc -o lamb lamb.c
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +9,18 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+
+#ifdef _WIN32
+#    define WIN32_LEAN_AND_MEAN
+#    define _WINUSER_
+#    define _WINGDI_
+#    define _IMM_
+#    define _WINCON_
+#    include <windows.h>
+#else
+#    include <unistd.h>
+#    include <sys/wait.h>
+#endif // _WIN32
 
 #if defined(__GNUC__) || defined(__clang__)
 //   https://gcc.gnu.org/onlinedocs/gcc-4.7.2/gcc/Function-Attributes.html
@@ -56,6 +68,67 @@
     } while(0)
 
 #define sb_append_null(sb) da_append(sb, 0)
+
+typedef struct {
+    const char **items;
+    size_t count;
+    size_t capacity;
+} Cmd;
+
+bool cmd_run(Cmd *cmd)
+{
+    if (cmd->count < 1) {
+        fprintf(stderr, "ERROR: Could not run empty command");
+        return false;
+    }
+
+#ifdef _WIN32
+    TODO("cmd_run is not implemented for windows");
+#else
+    pid_t cpid = fork();
+    if (cpid < 0) {
+        fprintf(stderr, "ERROR: Could not fork child process: %s", strerror(errno));
+        return false;
+    }
+
+    if (cpid == 0) {
+        // NOTE: This leaks a bit of memory in the child process.
+        // But do we actually care? It's a one off leak anyway...
+        da_append(cmd, NULL);
+
+        if (execvp(cmd->items[0], (char * const*) cmd->items) < 0) {
+            fprintf(stderr, "ERROR: Could not exec child process for %s: %s", cmd->items[0], strerror(errno));
+            exit(1);
+        }
+        UNREACHABLE("cmd_run");
+    }
+
+    for (;;) {
+        int wstatus = 0;
+        if (waitpid(cpid, &wstatus, 0) < 0) {
+            fprintf(stderr, "ERROR: Could not wait on command (pid %d): %s", cpid, strerror(errno));
+            return false;
+        }
+
+        if (WIFEXITED(wstatus)) {
+            int exit_status = WEXITSTATUS(wstatus);
+            if (exit_status != 0) {
+                fprintf(stderr, "ERROR: Command exited with exit code %d", exit_status);
+                return false;
+            }
+
+            break;
+        }
+
+        if (WIFSIGNALED(wstatus)) {
+            fprintf(stderr, "ERROR: Command process was terminated by signal %d", WTERMSIG(wstatus));
+            return false;
+        }
+    }
+
+    return cpid;
+#endif
+}
 
 char *copy_string(const char *s)
 {
@@ -913,14 +986,14 @@ void gc(Expr_Index root, Bindings bindings)
     }
 }
 
-// TODO: :edit command from ghci
 // TODO: :load command that loads from a specific file
+// TODO: use editor from $EDITOR or $LAMB_EDITOR on :edit
 // TODO: stop evaluation on ^C
 // TODO: step debug mode instead of tracing mode
-// TODO: change evaluation order to lazy
+// TODO: it's a bit annoying that lexer forces us to write :edit "file.lamb" instead of just :edit file.lamb
 // TODO: something to check alpha-equivalence of two terms
-// TODO: some mechanism to reorder bindings in the REPL
 // TODO: consider changing expr_display so it displays shortened up version of exprs so on :save it all looks nice
+// TODO: consider changing evaluation order to lazy
 int main(int argc, char **argv)
 {
     static char buffer[1024];
@@ -1010,6 +1083,33 @@ again:
                     sb_append_null(&sb);
                     printf("%s\n", sb.items);
                 }
+                goto again;
+            }
+            if (command(&commands, l.string.items, "edit", "<path>", "edit current active file")) {
+#ifdef _WIN32
+                fprintf(stderr, "TODO: editing files is not implemented on Windows yet! Sorry!\n");
+#else
+                if (!lexer_next(&l)) goto again;
+
+                if (l.token == TOKEN_STRING) {
+                    free(active_file_path);
+                    active_file_path = copy_string(l.string.items);
+                }
+
+                if (active_file_path == NULL) {
+                    fprintf(stderr, "ERROR: no active file to edit\n");
+                    goto again;
+                }
+
+                static Cmd cmd = {0};
+                cmd.count = 0;
+                da_append(&cmd, "vi");
+                da_append(&cmd, active_file_path);
+                if (cmd_run(&cmd)) {
+                    bindings.count = 0;
+                    create_bindings_from_file(active_file_path, &bindings);
+                }
+#endif // _WIN32
                 goto again;
             }
             if (command(&commands, l.string.items, "save", "<path>", "save current bindings to a file")) {

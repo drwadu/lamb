@@ -5,7 +5,7 @@ Smallest Pure Functional Programming Language in C. Based on [Untype Lambda Calc
 ## Quick Start
 
 ```console
-$ cc -std=c99 -o lamb lamb.c
+$ cc -o lamb lamb.c
 $ ./lamb ./std.lamb
 ...
 ,---@>
