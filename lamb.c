@@ -174,6 +174,7 @@ typedef enum {
     EXPR_VAR,
     EXPR_FUN,
     EXPR_APP,
+    EXPR_MAG,
 } Expr_Kind;
 
 typedef struct {
@@ -186,6 +187,7 @@ typedef struct {
     bool live;
     union {
         Symbol var;
+        const char *mag;
         struct {
             Symbol param;
             Expr_Index body;
@@ -246,6 +248,14 @@ Expr_Index var(Symbol name)
     return expr;
 }
 
+Expr_Index magic(const char *label)
+{
+    Expr_Index expr = alloc_expr();
+    expr_slot(expr).kind = EXPR_MAG;
+    expr_slot(expr).as.mag = intern_label(label);
+    return expr;
+}
+
 Expr_Index fun(Symbol param, Expr_Index body)
 {
     Expr_Index expr = alloc_expr();
@@ -294,6 +304,9 @@ void expr_display(Expr_Index expr, String_Builder *sb)
         expr_display(rhs, sb);
         if (expr_slot(rhs).kind != EXPR_VAR) sb_appendf(sb, ")");
     } break;
+    case EXPR_MAG: {
+        sb_appendf(sb, "#%s", expr_slot(expr).as.mag);
+    } break;
     default: UNREACHABLE("Expr_Kind");
     }
 }
@@ -319,6 +332,8 @@ bool is_var_free_there(Symbol name, Expr_Index there)
         if (is_var_free_there(name, expr_slot(there).as.app.lhs)) return true;
         if (is_var_free_there(name, expr_slot(there).as.app.rhs)) return true;
         return false;
+    case EXPR_MAG:
+        return false;
     default: UNREACHABLE("Expr_Kind");
     }
 }
@@ -326,6 +341,8 @@ bool is_var_free_there(Symbol name, Expr_Index there)
 Expr_Index replace(Symbol param, Expr_Index body, Expr_Index arg)
 {
     switch (expr_slot(body).kind) {
+    case EXPR_MAG:
+        return body;
     case EXPR_VAR:
         if (symbol_eq(expr_slot(body).as.var, param)) {
             return arg;
@@ -355,41 +372,70 @@ Expr_Index replace(Symbol param, Expr_Index body, Expr_Index arg)
     }
 }
 
-Expr_Index eval1(Expr_Index expr)
+bool eval1(Expr_Index expr, Expr_Index *expr1)
 {
     switch (expr_slot(expr).kind) {
     case EXPR_VAR:
-        return expr;
+        *expr1 = expr;
+        return true;
     case EXPR_FUN: {
-        Expr_Index body = eval1(expr_slot(expr).as.fun.body);
+        Expr_Index body;
+        if (!eval1(expr_slot(expr).as.fun.body, &body)) return false;
         if (body.unwrap != expr_slot(expr).as.fun.body.unwrap) {
-            return fun(expr_slot(expr).as.fun.param, body);
+            *expr1 = fun(expr_slot(expr).as.fun.param, body);
+        } else {
+            *expr1 = expr;
         }
-        return expr;
+        return true;
     }
     case EXPR_APP: {
         Expr_Index lhs = expr_slot(expr).as.app.lhs;
         Expr_Index rhs = expr_slot(expr).as.app.rhs;
 
         if (expr_slot(lhs).kind == EXPR_FUN) {
-            return replace(
+            *expr1 = replace(
                 expr_slot(lhs).as.fun.param,
                 expr_slot(lhs).as.fun.body,
                 rhs);
+            return true;
+        } else if (expr_slot(lhs).kind == EXPR_MAG) {
+            if (expr_slot(lhs).as.mag == intern_label("trace")) {
+                Expr_Index new_rhs;
+                if (!eval1(rhs, &new_rhs)) return false;
+                if (new_rhs.unwrap == rhs.unwrap) {
+                    printf("TRACE: ");
+                    trace_expr(rhs);
+                    *expr1 = rhs;
+                } else {
+                    *expr1 = app(lhs, new_rhs);
+                }
+                return true;
+            } else {
+                printf("ERROR: unknown magic #%s\n", expr_slot(lhs).as.mag);
+                return false;
+            }
         }
 
-        Expr_Index new_lhs = eval1(lhs);
+        Expr_Index new_lhs;
+        if (!eval1(lhs, &new_lhs)) return false;
         if (lhs.unwrap != new_lhs.unwrap) {
-            return app(new_lhs, rhs);
+            *expr1 = app(new_lhs, rhs);
+            return true;
         }
 
-        Expr_Index new_rhs = eval1(rhs);
+        Expr_Index new_rhs;
+        if (!eval1(rhs, &new_rhs)) return false;
         if (rhs.unwrap != new_rhs.unwrap) {
-            return app(lhs, new_rhs);
+            *expr1 = app(lhs, new_rhs);
+            return true;
         }
 
-        return expr;
+        *expr1 = expr;
+        return true;
     }
+    case EXPR_MAG:
+        *expr1 = expr;
+        return true;
     default: UNREACHABLE("Expr_Kind");
     }
 }
@@ -405,6 +451,7 @@ typedef enum {
     TOKEN_SEMICOLON,
     TOKEN_EQUALS,
     TOKEN_NAME,
+    TOKEN_MAGIC,
 } Token_Kind;
 
 const char *token_kind_display(Token_Kind kind)
@@ -420,6 +467,7 @@ const char *token_kind_display(Token_Kind kind)
     case TOKEN_COLON:     return "TOKEN_COLON";
     case TOKEN_SEMICOLON: return "TOKEN_SEMICOLON";
     case TOKEN_EQUALS:    return "TOKEN_EQUALS";
+    case TOKEN_MAGIC:     return "TOKEN_MAGIC";
     default: UNREACHABLE("Token_Kind");
     }
 }
@@ -512,6 +560,17 @@ bool lexer_next(Lexer *l)
     case '=':  l->token = TOKEN_EQUALS;    return true;
     }
 
+    if (x == '#') {
+        l->token = TOKEN_MAGIC;
+        l->name.count = 0;
+        while (isalnum(lexer_curr_char(l))) {
+            x = lexer_next_char(l);
+            da_append(&l->name, x);
+        }
+        sb_append_null(&l->name);
+        return true;
+    }
+
     if (isalnum(x)) {
         l->token = TOKEN_NAME;
         l->name.count = 0;
@@ -585,6 +644,9 @@ bool parse_primary(Lexer *l, Expr_Index *expr)
         return true;
     }
     case TOKEN_LAMBDA: return parse_fun(l, expr);
+    case TOKEN_MAGIC:
+        *expr = magic(l->name.items);
+        return true;
     case TOKEN_NAME:
         *expr = var(symbol(l->name.items));
         return true;
@@ -666,6 +728,7 @@ void gc_mark(Expr_Index root)
     if (expr_slot(root).visited) return;
     expr_slot(root).visited = true;
     switch (expr_slot(root).kind) {
+    case EXPR_MAG:
     case EXPR_VAR: break;
     case EXPR_FUN:
         gc_mark(expr_slot(root).as.fun.body);
@@ -756,11 +819,13 @@ void gc(Expr_Index root, Bindings bindings)
     }
 }
 
-// TODO: introduce a #trace magic function
 // TODO: delete bindings from REPL
 // TODO: save current bindings in REPL to a file
 // TODO: step debug mode instead of tracing mode
 // TODO: stop evaluation on ^C
+// TODO: :edit command from ghci
+// TODO: change evaluation order to lazy
+// TODO: something to check alpha-equivalence of two terms
 int main(int argc, char **argv)
 {
     static char buffer[1024];
@@ -815,6 +880,19 @@ again:
                 printf("Interned labels:  %zu\n", labels.count);
                 printf("Allocated exprs:  %zu\n", expr_pool.count);
                 printf("Dead exprs:       %zu\n", expr_dead_pool.count);
+                goto again;
+            }
+            if (command(&commands, l.name.items, "delete", "[binding]", "delete a binding by name")) {
+                if (!lexer_expect(&l, TOKEN_NAME)) goto again;
+                Symbol name = symbol(l.name.items);
+                for (size_t i = 0; i < bindings.count; ++i) {
+                    if (symbol_eq(bindings.items[i].name, name)) {
+                        da_delete_at(&bindings, i);
+                        printf("Deleted binding %s\n", name.label);
+                        goto again;
+                    }
+                }
+                printf("ERROR: binding %s was not found\n", name.label);
                 goto again;
             }
             if (command(&commands, l.name.items, "limit", "[number]", "change evaluation limit (0 for no limit)")) {
@@ -877,17 +955,21 @@ again:
         }
 
         if (trace) trace_expr(expr);
-        Expr_Index expr1 = eval1(expr);
+        Expr_Index expr1;
+        if (!eval1(expr, &expr1)) goto again;
         for (size_t i = 1; (limit == 0 || i < limit) && expr1.unwrap != expr.unwrap; ++i) {
             expr = expr1;
             gc(expr, bindings);
             if (trace) trace_expr(expr);
-            expr1 = eval1(expr);
+            if (!eval1(expr, &expr1)) goto again;
         }
         if (expr1.unwrap != expr.unwrap) {
             printf("Evaluation limit exceeded.\n");
         } else {
-            if (!trace) trace_expr(expr);
+            if (!trace) {
+                printf("RESULT: ");
+                trace_expr(expr);
+            }
         }
     }
 quit:

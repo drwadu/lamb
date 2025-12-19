@@ -12,15 +12,15 @@ $ ./lamb ./std.lamb
  W-W'
 Enter :help for more info
 @> pair 69 (pair 420 1337)
-\f.(f 69) (\f.(f 420) 1337)
+RESULT: \f.(f 69) (\f.(f 420) 1337)
 @> xs = pair 69 (pair 420 1337)
 Created binding xs
 @> first xs
-69
+RESULT: 69
 @> second xs
-\f.(f 420) 1337
+RESULT: \f.(f 420) 1337
 @> first (second xs)
-420
+RESULT: 420
 @>
 ```
 
@@ -42,11 +42,11 @@ Variables are any alphanumeric names:
 
 ```
 @> x
-x
+RESULT: x
 @> hello69
-hello69
+RESULT: hello69
 @> 69420
-69420
+RESULT: 69420
 @>
 ```
 
@@ -58,9 +58,9 @@ To denote functions instead of small greek lambda `λ` we use backslash `\` (thi
 
 ```
 @> \x.x
-\x.x
+RESULT: \x.x
 @> \x.\y.x
-\x.\y.x
+RESULT: \x.\y.x
 @>
 ```
 
@@ -68,10 +68,9 @@ The body of the function extends as far right as possible. Use parenthesis to de
 
 ```
 @> \x.x x
-\x.x x
+RESULT: \x.x x
 @> (\x.x) x
-(\x.x) x
-x
+RESULT: x
 @>
 ```
 
@@ -79,10 +78,9 @@ Since the variable names can be longer than 1 character we can't use that silly 
 
 ```
 @> \xy.x
-\xy.x
+RESULT: \xy.x
 @> (\xy.x) z
-(\xy.x) z
-x
+RESULT: x
 @>
 ```
 
@@ -90,10 +88,9 @@ Instead we allow you to drop consequent backslashes turning the dot `.` into a p
 
 ```
 @> \x.y.x
-\x.\y.x
+RESULT: \x.\y.x
 @> (\x.y.x) z
-(\x.\y.x) z
-\y.z
+RESULT: \y.z
 @>
 ```
 
@@ -103,8 +100,7 @@ Just separate two lambda expressions with a space:
 
 ```
 @> (\x.x) x
-(\x.x) x
-x
+RESULT: x
 @>
 ```
 
@@ -112,7 +108,7 @@ You can drop parenthesis if the expression is unambiguous:
 
 ```
 @> f \x.x
-f (\x.x)
+RESULT: f (\x.x)
 @>
 ```
 
@@ -120,6 +116,22 @@ Applications are left-associative:
 
 ```
 @> f a b c d
-(((f a) b) c) d
+RESULT: (((f a) b) c) d
+@>
+```
+
+### Magics
+
+Magics are special names that start with `#` cannot be used as parameters of functions (that is they are always free), that perform various useful side effects.
+
+`#trace` - when applied to a lambda expression it becomes a potential redex. When reduced it forces the reduction of its argument, prints the reduced argument to the console, and then returns it. Useful for debugging.
+
+```
+@> (#trace f) (#trace a) (#trace b) (#trace c)
+TRACE: f
+TRACE: a
+TRACE: b
+TRACE: c
+RESULT: ((f a) b) c
 @>
 ```
