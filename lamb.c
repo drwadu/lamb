@@ -462,6 +462,7 @@ char lexer_next_char(Lexer *l)
     return x;
 }
 
+// TODO: add comments to the lexer
 bool lexer_next(Lexer *l)
 {
     while (isspace(lexer_curr_char(l))) {
@@ -843,7 +844,7 @@ again:
         Expr_Index expr;
         if (!parse_expr(&l, &expr)) goto again;
         for (size_t i = bindings.count; i > 0; --i) {
-            expr = app(fun(bindings.items[i-1].name, expr), bindings.items[i-1].body);
+            expr = replace(bindings.items[i-1].name, expr, bindings.items[i-1].body);
         }
 
         if (trace) trace_expr(expr, &sb);
@@ -855,9 +856,9 @@ again:
             expr1 = eval1(expr);
         }
         if (expr1.unwrap != expr.unwrap) {
-            printf("Evaluation limit exceeded\n");
+            printf("Evaluation limit exceeded.\n");
         } else {
-            trace_expr(expr, &sb);
+            if (!trace) trace_expr(expr, &sb);
         }
     }
 quit:
