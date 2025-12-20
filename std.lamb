@@ -30,3 +30,5 @@ isnil  = first;
 cons   = \h.t.pair false (pair h t);
 head   = \l.first (second l);
 tail   = \l.second (second l);
+
+trace_list = Y \rec.\xs.isnil xs nil (cons (#trace (head xs))) (rec (tail xs));

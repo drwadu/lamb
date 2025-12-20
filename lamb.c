@@ -278,7 +278,7 @@ bool symbol_eq(Symbol a, Symbol b)
 
 Symbol symbol(const char *label)
 {
-    Symbol s = { .label = intern_label(label) };
+    Symbol s = { .label = intern_label(label), .tag = 0 };
     return s;
 }
 
@@ -412,16 +412,16 @@ void expr_display(Expr_Index expr, String_Builder *sb)
         break;
     case EXPR_APP: {
         Expr_Index lhs = expr_slot(expr).as.app.lhs;
-        if (expr_slot(lhs).kind != EXPR_VAR) sb_appendf(sb, "(");
+        if (expr_slot(lhs).kind != EXPR_VAR && expr_slot(lhs).kind != EXPR_MAG) sb_appendf(sb, "(");
         expr_display(lhs, sb);
-        if (expr_slot(lhs).kind != EXPR_VAR) sb_appendf(sb, ")");
+        if (expr_slot(lhs).kind != EXPR_VAR && expr_slot(lhs).kind != EXPR_MAG) sb_appendf(sb, ")");
 
         sb_appendf(sb, " ");
 
         Expr_Index rhs = expr_slot(expr).as.app.rhs;
-        if (expr_slot(rhs).kind != EXPR_VAR) sb_appendf(sb, "(");
+        if (expr_slot(rhs).kind != EXPR_VAR && expr_slot(rhs).kind != EXPR_MAG) sb_appendf(sb, "(");
         expr_display(rhs, sb);
-        if (expr_slot(rhs).kind != EXPR_VAR) sb_appendf(sb, ")");
+        if (expr_slot(rhs).kind != EXPR_VAR && expr_slot(rhs).kind != EXPR_MAG) sb_appendf(sb, ")");
     } break;
     case EXPR_MAG: {
         sb_appendf(sb, "#%s", expr_slot(expr).as.mag);
@@ -661,6 +661,11 @@ void lexer_drop_line(Lexer *l)
     while (l->cur.pos < l->count && lexer_next_char(l) != '\n') {}
 }
 
+bool issymbol(int x)
+{
+    return isalnum(x) || x == '_';
+}
+
 bool lexer_next(Lexer *l)
 {
     for (;;) {
@@ -691,7 +696,7 @@ bool lexer_next(Lexer *l)
     if (x == '#') {
         l->token = TOKEN_MAGIC;
         l->string.count = 0;
-        while (isalnum(lexer_curr_char(l))) {
+        while (issymbol(lexer_curr_char(l))) {
             x = lexer_next_char(l);
             da_append(&l->string, x);
         }
@@ -699,11 +704,11 @@ bool lexer_next(Lexer *l)
         return true;
     }
 
-    if (isalnum(x)) {
+    if (issymbol(x)) {
         l->token = TOKEN_NAME;
         l->string.count = 0;
         da_append(&l->string, x);
-        while (isalnum(lexer_curr_char(l))) {
+        while (issymbol(lexer_curr_char(l))) {
             x = lexer_next_char(l);
             da_append(&l->string, x);
         }
@@ -977,6 +982,7 @@ void replace_active_file_path_from_lexer_if_not_empty(Lexer l, char **active_fil
 // TODO: consider changing expr_display so it displays shortened up version of exprs so on :save it all looks nice
 //   That also means we need a debug tool that prints AST in a non-ambiguous way.
 // TODO: something to check alpha-equivalence of two terms with
+// TODO: GC slows down the execution significantly when there is too many expr slots allocated in the pool
 int main(int argc, char **argv)
 {
     static char buffer[1024];
