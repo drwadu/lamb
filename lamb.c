@@ -131,14 +131,18 @@ bool cmd_run(Cmd *cmd)
 #endif
 }
 
-char *copy_string(const char *s)
+char *copy_string_sized(const char *s, size_t n)
 {
-    int n = strlen(s);
     char *ds = malloc(n + 1);
     assert(ds);
     memcpy(ds, s, n);
     ds[n] = '\0';
     return ds;
+}
+
+char *copy_string(const char *s)
+{
+    return copy_string_sized(s, strlen(s));
 }
 
 typedef struct {
@@ -568,7 +572,6 @@ typedef enum {
     TOKEN_EQUALS,
     TOKEN_NAME,
     TOKEN_MAGIC,
-    TOKEN_STRING,
 } Token_Kind;
 
 const char *token_kind_display(Token_Kind kind)
@@ -585,7 +588,6 @@ const char *token_kind_display(Token_Kind kind)
     case TOKEN_EQUALS:    return "TOKEN_EQUALS";
     case TOKEN_NAME:      return "TOKEN_NAME";
     case TOKEN_MAGIC:     return "TOKEN_MAGIC";
-    case TOKEN_STRING:    return "TOKEN_STRING";
     default: UNREACHABLE("Token_Kind");
     }
 }
@@ -695,48 +697,6 @@ bool lexer_next(Lexer *l)
         }
         sb_append_null(&l->string);
         return true;
-    }
-
-    if (x == '"') {
-        l->token = TOKEN_STRING;
-        l->string.count = 0;
-        for (;;) {
-            if (l->cur.pos >= l->count) {
-                l->token = TOKEN_INVALID;
-                lexer_print_loc(l, stderr);
-                fprintf(stderr, "ERROR: unfinished string\n");
-                return false;
-            }
-            x = lexer_next_char(l);
-            switch (x) {
-            case '"':
-                sb_append_null(&l->string);
-                return true;
-            case '\\':
-                if (l->cur.pos >= l->count) {
-                    l->token = TOKEN_INVALID;
-                    lexer_print_loc(l, stderr);
-                    fprintf(stderr, "ERROR: unfinished escape sequence\n");
-                    return false;
-                }
-                x = lexer_next_char(l);
-                switch (x) {
-                case '"':
-                case '\\':
-                    da_append(&l->string, x);
-                    break;
-                default:
-                    l->token = TOKEN_INVALID;
-                    lexer_print_loc(l, stderr);
-                    fprintf(stderr, "ERROR: unknown escape sequence starting with `%c`\n", x);
-                    return false;
-                }
-                break;
-            default:
-                da_append(&l->string, x);
-            }
-        }
-        UNREACHABLE("string literal");
     }
 
     if (isalnum(x)) {
@@ -995,14 +955,28 @@ void ctrl_c_handler(int signum)
     ctrl_c = 1;
 }
 
-// TODO(20251219-231632): it's a bit annoying that lexer forces us to write :edit "file.lamb" instead of just :edit file.lamb
-//   Maybe as soon as we parsed TOKEN_COLON and TOKEN_NAME we should just treat the rest of characters as the path without
-//   using the Lexer. Maybe trim whitespaces from both ends and we are good to go. This also means we don't need TOKEN_STRING.
-// TODO: Bug in all the commands that accept active file (:load, :save, :edit, etc) when you provide token that is not TOKEN_STRING.
-//   It treats this as you didn't provide anything at asll. Very like will be invalidated by 20251219-231632.
-// TODO: something to check alpha-equivalence of two terms
+void replace_active_file_path_from_lexer_if_not_empty(Lexer l, char **active_file_path)
+{
+    const char *path_data = &l.content[l.cur.pos];
+    size_t path_count = l.count - l.cur.pos;
+    while (path_count > 0 && isspace(*path_data)) {
+        path_data++;
+        path_count--;
+    }
+    while (path_count > 0 && isspace(path_data[path_count - 1])) {
+        path_count--;
+    }
+
+    if (path_count > 0) {
+        free(*active_file_path);
+        *active_file_path = copy_string_sized(path_data, path_count);
+    }
+}
+
 // TODO: consider changing expr_display so it displays shortened up version of exprs so on :save it all looks nice
-// TODO: :save is pretty dangerous since it override all the formatting. Maybe it should do YorN?
+//   That also means we need a debug tool that prints AST in a non-ambiguous way.
+// TODO: :save is pretty dangerous since it overrides all the formatting. Maybe it should do YorN?
+// TODO: something to check alpha-equivalence of two terms with
 int main(int argc, char **argv)
 {
     static char buffer[1024];
@@ -1059,13 +1033,7 @@ again:
             if (!lexer_expect(&l, TOKEN_NAME)) goto again;
             commands.count = 0;
             if (command(&commands, l.string.items, "load", "[path]", "Load/reload bindings from a file.")) {
-                if (!lexer_next(&l)) goto again;
-
-                if (l.token == TOKEN_STRING) {
-                    free(active_file_path);
-                    active_file_path = copy_string(l.string.items);
-                }
-
+                replace_active_file_path_from_lexer_if_not_empty(l, &active_file_path);
                 if (active_file_path == NULL) {
                     fprintf(stderr, "ERROR: no active file to load from\n");
                     goto again;
@@ -1076,13 +1044,7 @@ again:
                 goto again;
             }
             if (command(&commands, l.string.items, "save", "[path]", "Save current bindings to a file.")) {
-                if (!lexer_next(&l)) goto again;
-
-                if (l.token == TOKEN_STRING) {
-                    free(active_file_path);
-                    active_file_path = copy_string(l.string.items);
-                }
-
+                replace_active_file_path_from_lexer_if_not_empty(l, &active_file_path);
                 if (active_file_path == NULL) {
                     fprintf(stderr, "ERROR: no active file to save to\n");
                     goto again;
@@ -1105,13 +1067,7 @@ again:
 #ifdef _WIN32
                 fprintf(stderr, "TODO: editing files is not implemented on Windows yet! Sorry!\n");
 #else
-                if (!lexer_next(&l)) goto again;
-
-                if (l.token == TOKEN_STRING) {
-                    free(active_file_path);
-                    active_file_path = copy_string(l.string.items);
-                }
-
+                replace_active_file_path_from_lexer_if_not_empty(l, &active_file_path);
                 if (active_file_path == NULL) {
                     fprintf(stderr, "ERROR: no active file to edit\n");
                     goto again;
