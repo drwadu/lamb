@@ -21,6 +21,7 @@
 #else
 #    include <unistd.h>
 #    include <sys/wait.h>
+#    include <sys/stat.h>
 #endif // _WIN32
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -172,6 +173,27 @@ int sb_appendf(String_Builder *sb, const char *fmt, ...)
     sb->count += n;
 
     return n;
+}
+
+// RETURNS:
+//  0 - file does not exists
+//  1 - file exists
+// -1 - error while checking if file exists. The error is logged
+int file_exists(const char *file_path)
+{
+#if _WIN32
+    // TODO: distinguish between "does not exists" and other errors
+    DWORD dwAttrib = GetFileAttributesA(file_path);
+    return dwAttrib != INVALID_FILE_ATTRIBUTES;
+#else
+    struct stat statbuf;
+    if (stat(file_path, &statbuf) < 0) {
+        if (errno == ENOENT) return 0;
+        fprintf(stderr, "ERROR: Could not check if file %s exists: %s", file_path, strerror(errno));
+        return -1;
+    }
+    return 1;
+#endif
 }
 
 bool read_entire_file(const char *path, String_Builder *sb)
@@ -978,11 +1000,10 @@ void replace_active_file_path_from_lexer_if_not_empty(Lexer l, char **active_fil
     }
 }
 
-// TODO: :save is pretty dangerous since it overrides all the formatting. Maybe it should do YorN?
 // TODO: consider changing expr_display so it displays shortened up version of exprs so on :save it all looks nice
 //   That also means we need a debug tool that prints AST in a non-ambiguous way.
-// TODO: something to check alpha-equivalence of two terms with
 // TODO: GC slows down the execution significantly when there is too many expr slots allocated in the pool
+// TODO: something to check alpha-equivalence of two terms with
 int main(int argc, char **argv)
 {
     static char buffer[1024];
@@ -1041,7 +1062,7 @@ again:
             if (command(&commands, l.string.items, "load", "[path]", "Load/reload bindings from a file.")) {
                 replace_active_file_path_from_lexer_if_not_empty(l, &active_file_path);
                 if (active_file_path == NULL) {
-                    fprintf(stderr, "ERROR: no active file to load from\n");
+                    fprintf(stderr, "ERROR: No active file to reload from. Do `:load <path>`.\n");
                     goto again;
                 }
 
@@ -1052,7 +1073,7 @@ again:
             if (command(&commands, l.string.items, "save", "[path]", "Save current bindings to a file.")) {
                 replace_active_file_path_from_lexer_if_not_empty(l, &active_file_path);
                 if (active_file_path == NULL) {
-                    fprintf(stderr, "ERROR: no active file to save to\n");
+                    fprintf(stderr, "ERROR: No active file to save to. Do `:save <path>`.\n");
                     goto again;
                 }
 
@@ -1065,6 +1086,20 @@ again:
                     sb_appendf(&sb, ";\n");
                 }
 
+                int exists = file_exists(active_file_path);
+                if (exists < 0) goto again;
+                if (exists) {
+                    bool yes = false;
+                    printf("WARNING! This command will override the formatting of %s. Really save? [N/y] ", active_file_path);
+                    fflush(stdout);
+                    if (!fgets(buffer, sizeof(buffer), stdin)) {
+                        if (feof(stdin)) goto quit;
+                        printf("\n");
+                        goto again;
+                    }
+                    if (*buffer != 'y' && *buffer != 'Y') goto again;
+                }
+
                 if (!write_entire_file(active_file_path, sb.items, sb.count)) goto again;
                 printf("Saved all the bindings to %s\n", active_file_path);
                 goto again;
@@ -1075,7 +1110,7 @@ again:
 #else
                 replace_active_file_path_from_lexer_if_not_empty(l, &active_file_path);
                 if (active_file_path == NULL) {
-                    fprintf(stderr, "ERROR: no active file to edit\n");
+                    fprintf(stderr, "ERROR: No active file to edit. Do `:edit <path>`.\n");
                     goto again;
                 }
 
