@@ -202,7 +202,42 @@ Updated binding id
 @>
 ```
 
-The bindings are not evaluated until you use them in an expression. When you enter an expression which contains the names of the bindings into the REPL to evaluated, first things that happens is the binding names are substituted with their corresponding values before starting evaluation. The bindings are substituted in a reversed order, so be careful with the order in which you create the bindings. Reassigning already existing bindinsg does not change their order. You have to `:delete` the binding first and create it again to affect its order.
+### Semantics of Bindings
+
+The bindings are not evaluated until you use them in an expression.
+
+When you enter an expression which contains the names of the bindings into the REPL to evaluate, first things that happens is the binding names are substituted with their corresponding values before starting the evaluation. The bindings are substituted in a reversed order, so be careful with the order in which you create the bindings. Reassigning already existing bindings does not change their order. You have to `:delete` the binding first and create it again to affect its order.
+
+Since each binding is applied only once you CANNOT use them for recursion
+
+```
+@> loop = loop
+Created binding loop
+@> loop
+RESULT: loop
+@>
+```
+
+Use [Y combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Y_combinator) to organize the recursion:
+
+```
+@> Y = \f.(\x.f (x x)) (\x.f (x x))
+Created binding Y
+@> :debug  Y g
+DEBUG: (\f.(\x.f (x x)) (\x.f (x x))) g
+DEBUG: (\x.g (x x)) (\x.g (x x))
+DEBUG: g ((\x.g (x x)) (\x.g (x x)))
+DEBUG: g (g ((\x.g (x x)) (\x.g (x x))))
+DEBUG: g (g (g ((\x.g (x x)) (\x.g (x x)))))
+DEBUG: g (g (g (g ((\x.g (x x)) (\x.g (x x))))))
+DEBUG: g (g (g (g (g ((\x.g (x x)) (\x.g (x x)))))))
+DEBUG: g (g (g (g (g (g ((\x.g (x x)) (\x.g (x x))))))))
+DEBUG: g (g (g (g (g (g (g ((\x.g (x x)) (\x.g (x x)))))))))
+DEBUG: g (g (g (g (g (g (g (g ((\x.g (x x)) (\x.g (x x))))))))))
+...
+```
+
+### Managing the Bindings Files
 
 To list all available bindings use `:list` command:
 
@@ -259,8 +294,12 @@ false = \x.y.y;
 @>
 ```
 
-IMPORTANT! The bindings in the bindings file are separate with semicolon `;`.
+Loading the bindings clears out all the previously defined bindings.
+
+IMPORTANT! The bindings in the bindings file are separate with a semicolon `;`.
 
 Repeating `:load` or `:save` without an argument applies it the last saved or loaded file (a.k.a. the active file).
+
+Use `:edit` command to open and edit the bindings file in an external editor. The default editor is `vi` but you can set it with `$EDITOR` and `$LAMB_EDITOR` environment variable.
 
 We provided a bunch of useful bindings in [std.lamb][./std.lamb].
