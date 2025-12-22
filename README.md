@@ -303,3 +303,26 @@ Repeating `:load` or `:save` without an argument applies it the last saved or lo
 Use `:edit` command to open and edit the bindings file in an external editor. The default editor is `vi` but you can set it with `$EDITOR` and `$LAMB_EDITOR` environment variable.
 
 We provided a bunch of useful bindings in [std.lamb][./std.lamb].
+
+Passing a file as a command line argument to the interpreter acts as if you instantly `:load`-ed it.
+
+```console
+$ ./lamb ./main.lamb
+Created binding id
+Created binding const
+Created binding true
+Created binding false
+,---@>
+ W-W'
+Enter :help for more info
+@> :list
+id = \x.x;
+const = \x.y.x;
+true = const;
+false = \x.y.y;
+@>
+```
+
+The file also automatically becames the active file. So `:load`, `:save`, and `:edit` will operate on it by default.
+
+The interpreter can only work with one active file at a time right now.
