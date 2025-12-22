@@ -202,6 +202,23 @@ Updated binding id
 @>
 ```
 
+To list all available bindings use `:list` command:
+
+```
+@> a = 69
+Created binding a
+@> b = 420
+Created binding b
+@> c = 1337
+Created binding c
+@> :list
+id = \y.y;
+a = 69;
+b = 420;
+c = 1337;
+@>
+```
+
 ### Semantics of Bindings
 
 The bindings are not evaluated until you use them in an expression.
@@ -238,23 +255,6 @@ DEBUG: g (g (g (g (g (g (g (g ((\x.g (x x)) (\x.g (x x))))))))))
 ```
 
 ### Managing the Bindings Files
-
-To list all available bindings use `:list` command:
-
-```
-@> a = 69
-Created binding a
-@> b = 420
-Created binding b
-@> c = 1337
-Created binding c
-@> :list
-id = \y.y;
-a = 69;
-b = 420;
-c = 1337;
-@>
-```
 
 You can save current bindings to a file with `:save` command:
 
