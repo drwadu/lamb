@@ -1,6 +1,6 @@
 # Lamb
 
-Tiny Pure Functional Programming Language in C. Based on [Untype Lambda Calculus](https://en.wikipedia.org/wiki/Lambda_calculus) with Normal Order reduction.
+Tiny Pure Functional Programming Language in C. Based on [Untyped Lambda Calculus](https://en.wikipedia.org/wiki/Lambda_calculus) with Normal Order reduction.
 
 ## Quick Start
 
